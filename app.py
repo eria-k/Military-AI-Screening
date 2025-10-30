@@ -45,12 +45,17 @@ def load_components():
     
     # First, extract model if needed
     if not extract_model_if_needed():
+        logger.error("❌ Failed to extract model")
         return False
         
     try:
         logger.info("🔄 Loading AI components...")
         
-        model = tf.keras.models.load_model("military_screening_cnn.h5")
+        # Load model with compatibility settings for TF 2.20
+        model = tf.keras.models.load_model(
+            "military_screening_cnn.h5",
+            compile=True
+        )
         logger.info("✅ Model loaded")
         
         scaler = joblib.load("scaler.pkl")
@@ -77,10 +82,13 @@ def home():
 def health_check():
     """Health check endpoint for Render"""
     components_loaded = all([model, scaler, label_encoder, knowledge_graph])
+    status = 'healthy' if components_loaded else 'loading'
+    
     return jsonify({
-        'status': 'healthy' if components_loaded else 'loading',
+        'status': status,
         'components_loaded': components_loaded,
-        'message': 'Military AI Screening System'
+        'message': 'Military AI Screening System',
+        'tensorflow_version': tf.__version__
     })
 
 @app.route('/predict', methods=['POST'])
@@ -90,7 +98,7 @@ def predict():
         if not all([model, scaler, label_encoder, knowledge_graph]):
             return jsonify({
                 'success': False, 
-                'error': 'AI components still loading. Please try again in 30 seconds.'
+                'error': 'AI components still loading. Please refresh and try again.'
             })
             
         # Get data from request
@@ -182,6 +190,7 @@ def get_demo_candidates():
 
 # Load components when app starts
 logger.info("🚀 Starting Military AI Screening System...")
+logger.info(f"📊 TensorFlow version: {tf.__version__}")
 load_components()
 
 if __name__ == '__main__':
