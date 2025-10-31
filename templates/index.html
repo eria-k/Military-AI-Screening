@@ -245,42 +245,50 @@
             checkServerStatus();
             setInterval(checkServerStatus, 10000);
         });
-
         async function screenCandidate(type) {
-            // Show loading
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('result').style.display = 'none';
+    // Show loading
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('result').style.display = 'none';
 
-            // Simulate different sensor data patterns
-            const demoData = {
-                'excellent': Array(561).fill().map(() => (Math.random() - 0.5) * 2),
-                'average': Array(561).fill().map(() => (Math.random() - 0.5) * 1.2),
-                'poor': Array(561).fill().map(() => (Math.random() - 0.5) * 0.5)
-            };
+    // Simulate different sensor data patterns
+    const demoData = {
+        'excellent': Array(561).fill().map(() => (Math.random() - 0.5) * 2),
+        'average': Array(561).fill().map(() => (Math.random() - 0.5) * 1.2),
+        'poor': Array(561).fill().map(() => (Math.random() - 0.5) * 0.5)
+    };
 
-            try {
-                const response = await fetch('/predict', {
-                    method: 'POST',
-                    headers: { 
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    },
-                    body: JSON.stringify({ sensor_data: demoData[type] })
-                });
+    try {
+        const response = await fetch('/predict', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({ sensor_data: demoData[type] })
+        });
 
-                if (!response.ok) {
-                    throw new Error(`Server responded with ${response.status}`);
-                }
-
-                const result = await response.json();
-                displayResult(result, type);
-            } catch (error) {
-                console.error('Error:', error);
-                displayError(error.message);
-            } finally {
-                document.getElementById('loading').style.display = 'none';
-            }
+        // Check if response is OK
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Server error: ${response.status} - ${errorText}`);
         }
+
+        const result = await response.json();
+        
+        if (result.success) {
+            displayResult(result, type);
+        } else {
+            throw new Error(result.error || 'Unknown error from server');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        displayError(error.message);
+    } finally {
+        document.getElementById('loading').style.display = 'none';
+    }
+}
+
+       
 
         function displayResult(result, candidateType) {
             const resultDiv = document.getElementById('result');
