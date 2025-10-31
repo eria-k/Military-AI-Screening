@@ -142,11 +142,9 @@ def health_check():
         'message': 'Military AI Screening System',
         'system_ready': all_components_loaded
     })
-
-# FIXED: ONLY ONE PREDICT FUNCTION
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
-    """Prediction endpoint that works even without knowledge graph"""
+    """Prediction endpoint - FIXED VERSION"""
     global all_components_loaded, knowledge_graph
     
     # Handle OPTIONS request for CORS
@@ -154,61 +152,84 @@ def predict():
         return '', 200
     
     try:
-        # Check if critical components are loaded
+        # Check if components are loaded
         if not all_components_loaded:
             return jsonify({
                 'success': False, 
                 'error': 'System is still initializing. Please wait a moment and try again.'
             })
         
-        # Check if we have critical components
-        if not all([model, scaler, label_encoder]):
-            return jsonify({
-                'success': False, 
-                'error': 'System configuration error. Missing critical components.'
-            })
-            
         # Get and validate request data
-        data = request.json
+        data = request.get_json()
         if not data or 'sensor_data' not in data:
             return jsonify({'success': False, 'error': 'No sensor_data provided'})
             
         sensor_data = data['sensor_data']
-        if len(sensor_data) != 561:
+        if not isinstance(sensor_data, list) or len(sensor_data) != 561:
             return jsonify({
                 'success': False, 
-                'error': f'Expected 561 features, got {len(sensor_data)}'
+                'error': f'Expected 561 features as list, got {type(sensor_data)} with length {len(sensor_data) if isinstance(sensor_data, list) else "N/A"}'
             })
         
-        # Convert to numpy array
-        sensor_array = np.array(sensor_data, dtype=np.float64).reshape(1, -1)
+        # Convert to numpy array with error handling
+        try:
+            sensor_array = np.array(sensor_data, dtype=np.float64).reshape(1, -1)
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Invalid sensor data format: {str(e)}'})
         
         # Preprocess data
-        scaled_data = scaler.transform(sensor_array)
-        reshaped_data = scaled_data.reshape(1, 561, 1)
+        try:
+            scaled_data = scaler.transform(sensor_array)
+            reshaped_data = scaled_data.reshape(1, 561, 1)
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Data preprocessing failed: {str(e)}'})
         
         # Make prediction
-        predictions = model.predict(reshaped_data, verbose=0)
-        confidence = float(np.max(predictions))
-        predicted_class = int(np.argmax(predictions, axis=1)[0])
-        activity = label_encoder.inverse_transform([predicted_class])[0]
+        try:
+            predictions = model.predict(reshaped_data, verbose=0)
+            confidence = float(np.max(predictions))
+            predicted_class = int(np.argmax(predictions, axis=1)[0])
+            activity = label_encoder.inverse_transform([predicted_class])[0]
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Model prediction failed: {str(e)}'})
         
-        logger.info(f"✅ Prediction: {activity} with confidence {confidence:.3f}")
+        logger.info(f"✅ Prediction successful: {activity} with confidence {confidence:.3f}")
         
-        # Get role recommendations (use knowledge graph if available, else use default logic)
-        if knowledge_graph and hasattr(knowledge_graph, 'get_recommendations'):
-            # Use knowledge graph if it has the method
-            roles = knowledge_graph.get_recommendations(confidence)
-            recommendation_source = "knowledge_graph"
-        else:
-            # Use default logic
+        # Extract biomarkers for knowledge graph
+        biomarkers = {
+            'movement_quality': confidence,
+            'fatigue_index': 0.05 if confidence > 0.8 else 0.15,
+            'movement_smoothness': confidence * 0.9 + 0.1
+        }
+        
+        # Use knowledge graph for recommendations
+        try:
+            if hasattr(knowledge_graph, 'recommend_roles'):
+                kg_result = knowledge_graph.recommend_roles(biomarkers)
+                roles = kg_result['recommended_roles']
+                detected_risks = kg_result.get('detected_risks', [])
+                recommendation_source = "knowledge_graph"
+            else:
+                # Fallback if knowledge graph doesn't have the method
+                if confidence > 0.8:
+                    roles = ["Infantry", "Special Forces", "Combat Engineer"]
+                elif confidence > 0.6:
+                    roles = ["Military Police", "Logistics", "Signals", "Administration"]
+                else:
+                    roles = ["Medical Evaluation Required"]
+                detected_risks = []
+                recommendation_source = "fallback"
+        except Exception as e:
+            logger.warning(f"Knowledge graph failed, using fallback: {e}")
+            # Fallback logic
             if confidence > 0.8:
                 roles = ["Infantry", "Special Forces", "Combat Engineer"]
             elif confidence > 0.6:
                 roles = ["Military Police", "Logistics", "Signals", "Administration"]
             else:
                 roles = ["Medical Evaluation Required"]
-            recommendation_source = "default_logic"
+            detected_risks = []
+            recommendation_source = "error_fallback"
         
         # Make decision
         if confidence > 0.8:
@@ -233,17 +254,19 @@ def predict():
                 'reason': reason,
                 'risk_level': risk_level,
                 'recommended_roles': roles,
+                'detected_risks': detected_risks,
                 'recommendation_source': recommendation_source,
                 'performance_score': round(confidence * 100, 1)
             }
         })
         
     except Exception as e:
-        logger.error(f"❌ Prediction error: {e}")
+        logger.error(f"❌ Prediction endpoint error: {e}")
         return jsonify({
             'success': False,
-            'error': f'Prediction processing error: {str(e)}'
-        })
+            'error': f'Unexpected error: {str(e)}'
+        })    
+
 
 # Initialize components when app starts
 logger.info("🚀 Military AI Screening System Starting...")
