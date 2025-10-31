@@ -105,7 +105,7 @@ def health_check():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """Simplified prediction endpoint"""
+    """Prediction endpoint"""
     try:
         if not all([model, scaler, label_encoder, knowledge_graph]):
             return jsonify({'success': False, 'error': 'System initializing...'})
@@ -114,7 +114,7 @@ def predict():
         if 'sensor_data' not in data:
             return jsonify({'success': False, 'error': 'No sensor data'})
             
-        # Convert to numpy array with proper dtype for NumPy 2.0
+        # Convert to numpy array with proper dtype
         sensor_data = np.array(data['sensor_data'], dtype=np.float64).reshape(1, -1)
         
         # Preprocess
@@ -127,7 +127,7 @@ def predict():
         predicted_class = int(np.argmax(predictions, axis=1)[0])
         activity = label_encoder.inverse_transform([predicted_class])[0]
         
-        # Simple decision logic
+        # Decision logic
         if confidence > 0.8:
             decision = "PASS"
             roles = ["Infantry", "Special Forces", "Combat Engineer"]
@@ -157,15 +157,6 @@ def predict():
         logger.error(f"Prediction error: {e}")
         return jsonify({'success': False, 'error': 'Processing error'})
 
-@app.route('/demo')
-def demo_info():
-    """Demo information"""
-    return jsonify({
-        'system': 'Military AI Screening',
-        'status': 'operational',
-        'demo_candidates': ['excellent', 'average', 'poor']
-    })
-
 # Initialize components
 logger.info("🚀 Military AI Screening System Starting...")
 load_components()
@@ -173,4 +164,3 @@ load_components()
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
