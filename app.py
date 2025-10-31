@@ -1,119 +1,112 @@
-import os
-import json
-import warnings
+import os, warnings, logging
 from typing import Any, Dict, List
-
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
-
 import numpy as np
 import joblib
-import logging
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Quieter sklearn warning
 warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
+# Keep TF CPU modest on small instances
 os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "1")
 os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
 
 import tensorflow as tf
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+log = logging.getLogger("app")
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(APP_DIR, "military_screening_cnn.h5"))
 SCALER_PATH = os.getenv("SCALER_PATH", os.path.join(APP_DIR, "scaler.pkl"))
-LE_PATH = os.getenv("LABEL_ENCODER_PATH", os.path.join(APP_DIR, "label_encoder.pkl"))
-KG_PATH = os.getenv("KG_PATH", os.path.join(APP_DIR, "military_knowledge_graph.pkl"))
+LE_PATH     = os.getenv("LABEL_ENCODER_PATH", os.path.join(APP_DIR, "label_encoder.pkl"))
+KG_PATH     = os.getenv("KG_PATH", os.path.join(APP_DIR, "military_knowledge_graph.pkl"))
 EXPECTED_FEATURES = int(os.getenv("EXPECTED_FEATURES", "561"))
 
 app = Flask(__name__, template_folder="templates")
 CORS(app)
 
-def ensure_model_exists() -> bool:
-    if os.path.exists(MODEL_PATH):
-        return True
-    archive_path = os.path.join(APP_DIR, "military_screening_cnn.7z")
-    if os.path.exists(archive_path):
-        try:
-            import py7zr
-            logger.info("🔄 Extracting model from 7z...")
-            with py7zr.SevenZipFile(archive_path, mode='r') as z:
-                z.extractall(APP_DIR)
-            logger.info("✅ Model extracted")
-            return os.path.exists(MODEL_PATH)
-        except Exception as e:
-            logger.error(f"❌ Extraction failed: {e}")
-            return False
-    logger.error("❌ Model missing and no .7z archive found")
-    return False
-
-def load_pickle(path: str, fallback=None):
+def load_pickle(path, fallback=None):
     try:
         obj = joblib.load(path)
-        logger.info(f"✅ Loaded {os.path.basename(path)}")
+        log.info(f"✅ Loaded {os.path.basename(path)}")
         return obj
     except Exception as e:
-        logger.warning(f"⚠️ Could not load {os.path.basename(path)}: {e}")
+        log.warning(f"⚠️ Could not load {os.path.basename(path)}: {e}")
         return fallback
 
 def build_default_kg() -> Dict[str, Any]:
     return {
         "role_rules": {
-            "LOW": ["Infantry", "Special Forces", "Combat Engineer"],
-            "MODERATE": ["Military Police", "Logistics", "Signals", "Administration"],
+            "LOW": ["Infantry","Special Forces","Combat Engineer"],
+            "MODERATE": ["Military Police","Logistics","Signals","Administration"],
             "HIGH": ["Medical Evaluation Required"]
         }
     }
 
-logger.info("🚀 Military AI Screening System Starting...")
-if not ensure_model_exists():
-    logger.error("❌ Model not available at startup")
+# ---------- Startup ----------
+log.info("🚀 Military AI Screening System Starting...")
+if not os.path.exists(MODEL_PATH):
+    # If you keep a 7z in the container, auto-extract here (optional)
+    archive = os.path.join(APP_DIR, "military_screening_cnn.7z")
+    if os.path.exists(archive):
+        try:
+            import py7zr
+            log.info("🔄 Extracting model from 7z...")
+            with py7zr.SevenZipFile(archive, mode="r") as z:
+                z.extractall(APP_DIR)
+            log.info("✅ Model extracted")
+        except Exception as e:
+            log.error(f"❌ 7z extraction failed: {e}")
 
-logger.info("🔄 Loading TensorFlow model...")
+log.info("🔄 Loading TensorFlow model...")
 model = tf.keras.models.load_model(MODEL_PATH, compile=False)
 try:
     model.compile()
 except Exception:
     pass
-logger.info("✅ TensorFlow model loaded")
+log.info("✅ TensorFlow model loaded")
 
 scaler = load_pickle(SCALER_PATH)
 label_encoder = load_pickle(LE_PATH)
-knowledge_graph = load_pickle(KG_PATH, fallback=build_default_kg())
-if knowledge_graph is None or not isinstance(knowledge_graph, dict):
-    knowledge_graph = build_default_kg()
+knowledge_graph = load_pickle(KG_PATH, fallback=build_default_kg()) or build_default_kg()
 
-all_components_loaded = model is not None and scaler is not None and label_encoder is not None
+# Warmup to avoid slow first request → proxy 502
+try:
+    dummy = np.zeros((1, EXPECTED_FEATURES), dtype=np.float32)
+    if scaler is not None:
+        dummy = scaler.transform(dummy)
+    dummy = dummy.reshape((1, EXPECTED_FEATURES, 1))
+    _ = model.predict(dummy, verbose=0)
+    log.info("🔥 Warmup inference complete")
+except Exception as e:
+    log.warning(f"Warmup skipped: {e}")
 
-def compute_biomarkers(p: float) -> Dict[str, float]:
+SYSTEM_READY = all([model is not None, scaler is not None, label_encoder is not None])
+
+# ---------- Helpers ----------
+def compute_biomarkers(p: float) -> Dict[str,float]:
     return {
         "movement_quality": float(p),
         "fatigue_index": float(0.05 if p > 0.8 else 0.15 if p > 0.6 else 0.25),
-        "movement_smoothness": float(p * 0.9 + 0.1)
+        "movement_smoothness": float(p*0.9 + 0.1)
     }
 
-def risk_from_biomarkers(bio: Dict[str, float]) -> str:
-    mq = bio.get("movement_quality", 0.0)
-    if mq > 0.8: return "LOW"
-    if mq > 0.6: return "MODERATE"
-    return "HIGH"
+def decide(p: float):
+    if p > 0.8:  return "PASS", "Excellent movement quality", "LOW"
+    if p > 0.6:  return "CONDITIONAL PASS", "Adequate, some improvement needed", "MODERATE"
+    return "FAIL", "Indicators suggest limitations", "HIGH"
 
-def decide(p: float) -> (str, str, str):
-    if p > 0.8:  return "PASS", "Excellent movement quality and physical performance", "LOW"
-    if p > 0.6:  return "CONDITIONAL PASS", "Adequate performance with some areas for improvement", "MODERATE"
-    return "FAIL", "Movement analysis indicates physical limitations", "HIGH"
-
+# ---------- Routes ----------
 @app.get("/health")
 def health():
     return jsonify({
-        "status": "healthy" if all_components_loaded else "initializing",
-        "system_ready": all_components_loaded,
-        "components": {
-            "model": bool(model is not None),
-            "scaler": bool(scaler is not None),
-            "label_encoder": bool(label_encoder is not None),
-            "knowledge_graph": bool(knowledge_graph is not None),
-        }
+        "ok": SYSTEM_READY,
+        "model": os.path.basename(MODEL_PATH),
+        "scaler": os.path.basename(SCALER_PATH) if scaler is not None else None,
+        "label_encoder": os.path.basename(LE_PATH) if label_encoder is not None else None,
+        "kg": "loaded" if knowledge_graph else "default"
     })
 
 @app.get("/")
@@ -122,8 +115,8 @@ def home():
 
 @app.post("/predict")
 def predict():
-    if not all_components_loaded:
-        return jsonify({"success": False, "error": "System is initializing. Please retry in a moment."}), 503
+    if not SYSTEM_READY:
+        return jsonify({"success": False, "error": "System initializing; retry shortly."}), 503
 
     try:
         payload = request.get_json(force=True, silent=False)
@@ -145,7 +138,7 @@ def predict():
             return jsonify({"success": False, "error": "sensor_data contains NaN/Inf"}), 400
 
         X = scaler.transform(arr) if scaler is not None else arr
-        X_cnn = X.reshape((X.shape[0], X.shape[1], 1))
+        X_cnn = X.reshape((1, EXPECTED_FEATURES, 1))
 
         probs = model.predict(X_cnn, verbose=0)
         if probs.ndim == 2:
@@ -161,8 +154,8 @@ def predict():
             activity = str(pred_idx)
 
         biomarkers = compute_biomarkers(proba)
-        decision, reason, risk_level = decide(proba)
-        roles = knowledge_graph.get("role_rules", {}).get(risk_level, ["General Service"])
+        decision, reason, risk = decide(proba)
+        roles = knowledge_graph.get("role_rules", {}).get(risk, ["General Service"])
 
         return jsonify({
             "success": True,
@@ -171,17 +164,18 @@ def predict():
                 "confidence": round(proba, 4),
                 "decision": decision,
                 "reason": reason,
-                "risk_level": risk_level,
+                "risk_level": risk,
                 "recommended_roles": roles,
-                "detected_risks": [],
-                "performance_score": round(proba * 100, 1)
+                "biomarkers": {k: round(v,4) for k,v in biomarkers.items()},
+                "performance_score": round(proba*100, 1)
             }
         })
     except Exception as e:
-        logger.exception("Prediction error")
-        return jsonify({"success": False, "error": f"Server error during prediction: {str(e)}"}), 500
+        log.exception("Prediction error")
+        return jsonify({"success": False, "error": f"Server error during prediction: {e}"}), 500
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
 
