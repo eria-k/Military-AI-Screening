@@ -18,30 +18,29 @@ label_encoder = None
 knowledge_graph = None
 
 def ensure_model_exists():
-    """Ensure model file exists - extract from 7z or create demo"""
+    """Ensure model file exists"""
     if not os.path.exists("military_screening_cnn.h5"):
-        logger.info("🔄 Model file not found, attempting extraction...")
+        logger.info("🔄 Model file not found, handling...")
         try:
             # Try to extract from 7z
             import py7zr
             if os.path.exists("military_screening_cnn.7z"):
                 with py7zr.SevenZipFile('military_screening_cnn.7z', mode='r') as z:
                     z.extractall()
-                logger.info("✅ Model extracted from 7z successfully!")
+                logger.info("✅ Model extracted from 7z!")
                 return True
             else:
                 logger.warning("⚠️ 7z file not found, creating demo model...")
                 return create_demo_model()
         except Exception as e:
             logger.error(f"❌ Extraction failed: {e}")
-            logger.info("🔄 Creating demo model instead...")
             return create_demo_model()
     return True
 
 def create_demo_model():
     """Create a simple demo model"""
     try:
-        logger.info("🔄 Creating demo model for presentation...")
+        logger.info("🔄 Creating demo model...")
         from tensorflow.keras.models import Sequential
         from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
         
@@ -55,10 +54,10 @@ def create_demo_model():
         
         demo_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
         demo_model.save('military_screening_cnn.h5')
-        logger.info("✅ Demo model created successfully!")
+        logger.info("✅ Demo model created!")
         return True
     except Exception as e:
-        logger.error(f"❌ Demo model creation failed: {e}")
+        logger.error(f"❌ Demo model failed: {e}")
         return False
 
 def load_components():
@@ -68,11 +67,10 @@ def load_components():
     try:
         logger.info("🔄 Loading AI components...")
         
-        # Ensure model exists first
         if not ensure_model_exists():
+            logger.error("❌ Could not ensure model exists")
             return False
         
-        # Load components
         model = tf.keras.models.load_model("military_screening_cnn.h5")
         logger.info("✅ Model loaded")
         
@@ -85,11 +83,11 @@ def load_components():
         knowledge_graph = joblib.load("military_knowledge_graph.pkl")
         logger.info("✅ Knowledge graph loaded")
         
-        logger.info("🎯 All components loaded successfully!")
+        logger.info("🎯 All components loaded!")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Error loading components: {e}")
+        logger.error(f"❌ Loading failed: {e}")
         return False
 
 @app.route('/')
@@ -102,57 +100,77 @@ def health_check():
     return jsonify({
         'status': 'healthy' if components_loaded else 'loading',
         'components_loaded': components_loaded,
-        'python_version': '3.11.9',
-        'tensorflow_version': tf.__version__
+        'message': 'Military AI Screening System - READY'
     })
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    """Simplified prediction endpoint"""
     try:
         if not all([model, scaler, label_encoder, knowledge_graph]):
             return jsonify({'success': False, 'error': 'System initializing...'})
             
         data = request.json
         if 'sensor_data' not in data:
-            return jsonify({'success': False, 'error': 'No data provided'})
+            return jsonify({'success': False, 'error': 'No sensor data'})
             
-        sensor_data = np.array(data['sensor_data']).reshape(1, -1)
+        # Convert to numpy array with proper dtype for NumPy 2.0
+        sensor_data = np.array(data['sensor_data'], dtype=np.float64).reshape(1, -1)
+        
+        # Preprocess
         scaled_data = scaler.transform(sensor_data)
         reshaped_data = scaled_data.reshape(1, 561, 1)
         
+        # Predict
         predictions = model.predict(reshaped_data, verbose=0)
-        confidence = np.max(predictions)
-        activity = label_encoder.inverse_transform([np.argmax(predictions, axis=1)[0]])[0]
+        confidence = float(np.max(predictions))
+        predicted_class = int(np.argmax(predictions, axis=1)[0])
+        activity = label_encoder.inverse_transform([predicted_class])[0]
         
-        # Decision logic
+        # Simple decision logic
         if confidence > 0.8:
-            decision, roles = "PASS", ["Infantry", "Special Forces", "Combat Engineer"]
+            decision = "PASS"
+            roles = ["Infantry", "Special Forces", "Combat Engineer"]
+            reason = "Excellent performance"
         elif confidence > 0.6:
-            decision, roles = "CONDITIONAL PASS", ["Logistics", "Signals", "Administration"]
+            decision = "CONDITIONAL PASS" 
+            roles = ["Logistics", "Signals", "Administration"]
+            reason = "Adequate performance"
         else:
-            decision, roles = "FAIL", ["Medical Evaluation Required"]
+            decision = "FAIL"
+            roles = ["Medical Evaluation Required"]
+            reason = "Needs improvement"
         
         return jsonify({
             'success': True,
             'prediction': {
                 'activity': activity,
-                'confidence': float(confidence),
+                'confidence': confidence,
                 'decision': decision,
+                'reason': reason,
                 'recommended_roles': roles,
-                'biomarkers': {
-                    'movement_quality': float(confidence),
-                    'performance_score': float(confidence * 100)
-                }
+                'performance_score': round(confidence * 100, 1)
             }
         })
         
     except Exception as e:
-        return jsonify({'success': False, 'error': 'Prediction error'})
+        logger.error(f"Prediction error: {e}")
+        return jsonify({'success': False, 'error': 'Processing error'})
 
-# Initialize on startup
-logger.info("🚀 Starting Military AI Screening System...")
+@app.route('/demo')
+def demo_info():
+    """Demo information"""
+    return jsonify({
+        'system': 'Military AI Screening',
+        'status': 'operational',
+        'demo_candidates': ['excellent', 'average', 'poor']
+    })
+
+# Initialize components
+logger.info("🚀 Military AI Screening System Starting...")
 load_components()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
