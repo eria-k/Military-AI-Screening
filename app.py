@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)  # Add this line - enables CORS for all route
 
-
 # Global variables for loaded components
 model = None
 scaler = None
@@ -143,16 +142,16 @@ def health_check():
         'message': 'Military AI Screening System',
         'system_ready': all_components_loaded
     })
-    
-@app.route('/predict', methods=['POST', 'OPTIONS'])
-def predict():
-    if request.method == 'OPTIONS':
-        return '', 200
 
-@app.route('/predict', methods=['POST'])
+# FIXED: ONLY ONE PREDICT FUNCTION
+@app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
     """Prediction endpoint that works even without knowledge graph"""
     global all_components_loaded, knowledge_graph
+    
+    # Handle OPTIONS request for CORS
+    if request.method == 'OPTIONS':
+        return '', 200
     
     try:
         # Check if critical components are loaded
@@ -254,5 +253,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🌐 Starting server on port {port}")
     app.run(host='0.0.0.0', port=port)
-
 
