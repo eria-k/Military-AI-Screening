@@ -22,25 +22,26 @@ def extract_model_if_needed():
     if not os.path.exists("military_screening_cnn.h5"):
         logger.info("🔄 Extracting model from 7z archive...")
         try:
-            # Use py7zr instead of system 7z
+            # Use py7zr for extraction
             import py7zr
             with py7zr.SevenZipFile('military_screening_cnn.7z', mode='r') as z:
                 z.extractall()
-            logger.info("✅ Model extracted successfully using py7zr!")
+            logger.info("✅ Model extracted successfully!")
             return True
         except Exception as e:
             logger.error(f"❌ Extraction failed: {e}")
-            # If extraction fails, create a simple model for demo
+            logger.info("🔄 Creating demo model instead...")
             return create_demo_model()
     return True
 
 def create_demo_model():
     """Create a simple demo model if extraction fails"""
     try:
-        logger.info("🔄 Creating demo model...")
+        logger.info("🔄 Creating demo model for presentation...")
         from tensorflow.keras.models import Sequential
         from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
         
+        # Simple model that will work for demo
         demo_model = Sequential([
             Conv1D(8, 3, activation='relu', input_shape=(561, 1)),
             MaxPooling1D(2),
@@ -61,18 +62,19 @@ def load_components():
     """Load AI components at startup"""
     global model, scaler, label_encoder, knowledge_graph
     
-    # First, extract model if needed
-    if not extract_model_if_needed():
-        logger.error("❌ Failed to extract or create model")
-        return False
-        
     try:
         logger.info("🔄 Loading AI components...")
+        
+        # First, handle model extraction/creation
+        if not extract_model_if_needed():
+            logger.error("❌ Failed to handle model")
+            return False
         
         # Load model
         model = tf.keras.models.load_model("military_screening_cnn.h5")
         logger.info("✅ Model loaded")
         
+        # Load other components
         scaler = joblib.load("scaler.pkl")
         logger.info("✅ Scaler loaded")
         
@@ -95,15 +97,12 @@ def home():
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint for Render"""
+    """Health check endpoint"""
     components_loaded = all([model, scaler, label_encoder, knowledge_graph])
-    status = 'healthy' if components_loaded else 'loading'
-    
     return jsonify({
-        'status': status,
+        'status': 'healthy' if components_loaded else 'loading',
         'components_loaded': components_loaded,
-        'message': 'Military AI Screening System',
-        'tensorflow_version': tf.__version__
+        'message': 'Military AI Screening System'
     })
 
 @app.route('/predict', methods=['POST'])
@@ -113,7 +112,7 @@ def predict():
         if not all([model, scaler, label_encoder, knowledge_graph]):
             return jsonify({
                 'success': False, 
-                'error': 'AI components still loading. Please refresh and try again.'
+                'error': 'System initializing. Please try again in 30 seconds.'
             })
             
         # Get data from request
@@ -122,12 +121,6 @@ def predict():
             return jsonify({'success': False, 'error': 'No sensor_data provided'})
             
         sensor_data = np.array(data['sensor_data']).reshape(1, -1)
-        
-        if sensor_data.shape[1] != 561:
-            return jsonify({
-                'success': False, 
-                'error': f'Expected 561 features, got {sensor_data.shape[1]}'
-            })
         
         # Preprocess
         scaled_data = scaler.transform(sensor_data)
@@ -180,7 +173,7 @@ def predict():
         logger.error(f"Prediction error: {e}")
         return jsonify({
             'success': False,
-            'error': f'Prediction failed: {str(e)}'
+            'error': 'System error. Please try again.'
         })
 
 @app.route('/demo-candidates')
@@ -205,9 +198,9 @@ def get_demo_candidates():
 
 # Load components when app starts
 logger.info("🚀 Starting Military AI Screening System...")
-logger.info(f"📊 TensorFlow version: {tf.__version__}")
 load_components()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
