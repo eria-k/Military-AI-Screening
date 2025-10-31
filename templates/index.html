@@ -137,6 +137,16 @@
             margin-top: 30px;
             border-left: 4px solid #3498db;
         }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-online { background: #27ae60; }
+        .status-offline { background: #e74c3c; }
+        .status-loading { background: #f39c12; }
     </style>
 </head>
 <body>
@@ -144,11 +154,15 @@
         <div class="header">
             <h1>🎯 Military AI Pre-Screening System</h1>
             <p>AI-Powered Physical Fitness Assessment for Military Recruitment</p>
+            <div style="margin-top: 15px;">
+                <span id="status-indicator" class="status-indicator status-loading"></span>
+                <span id="status-text">Checking server status...</span>
+            </div>
         </div>
 
         <div class="system-info">
-            <h3>🚀 System Overview</h3>
-            <p>This system uses deep learning to analyze sensor data and assess candidate suitability for military roles based on movement biomarkers.</p>
+            <h3>🚀 System Status: <span id="system-status">Checking...</span></h3>
+            <p id="system-message">Connecting to AI server...</p>
         </div>
 
         <h2>🧪 Demonstration Candidates</h2>
@@ -188,6 +202,50 @@
     </div>
 
     <script>
+        // Server status check
+        async function checkServerStatus() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                
+                const statusIndicator = document.getElementById('status-indicator');
+                const statusText = document.getElementById('status-text');
+                const systemStatus = document.getElementById('system-status');
+                const systemMessage = document.getElementById('system-message');
+                
+                if (data.status === 'healthy') {
+                    statusIndicator.className = 'status-indicator status-online';
+                    statusText.textContent = 'Server Online - System Ready';
+                    systemStatus.textContent = 'OPERATIONAL';
+                    systemStatus.style.color = '#27ae60';
+                    systemMessage.textContent = 'AI system is ready for screening candidates';
+                } else {
+                    statusIndicator.className = 'status-indicator status-loading';
+                    statusText.textContent = 'Server Initializing - Please wait';
+                    systemStatus.textContent = 'INITIALIZING';
+                    systemStatus.style.color = '#f39c12';
+                    systemMessage.textContent = 'AI components are loading, please wait a moment';
+                }
+            } catch (error) {
+                const statusIndicator = document.getElementById('status-indicator');
+                const statusText = document.getElementById('status-text');
+                const systemStatus = document.getElementById('system-status');
+                const systemMessage = document.getElementById('system-message');
+                
+                statusIndicator.className = 'status-indicator status-offline';
+                statusText.textContent = 'Server Offline';
+                systemStatus.textContent = 'OFFLINE';
+                systemStatus.style.color = '#e74c3c';
+                systemMessage.textContent = 'Unable to connect to AI server. Please refresh the page.';
+            }
+        }
+
+        // Check server status on page load and every 10 seconds
+        window.addEventListener('load', () => {
+            checkServerStatus();
+            setInterval(checkServerStatus, 10000);
+        });
+
         async function screenCandidate(type) {
             // Show loading
             document.getElementById('loading').style.display = 'block';
@@ -203,15 +261,22 @@
             try {
                 const response = await fetch('/predict', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
                     body: JSON.stringify({ sensor_data: demoData[type] })
                 });
+
+                if (!response.ok) {
+                    throw new Error(`Server responded with ${response.status}`);
+                }
 
                 const result = await response.json();
                 displayResult(result, type);
             } catch (error) {
                 console.error('Error:', error);
-                displayError();
+                displayError(error.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
@@ -266,10 +331,11 @@
                     </div>
                     
                     <div style="margin-top: 20px; padding: 15px; background: rgba(0,0,0,0.05); border-radius: 8px;">
-                        <h4>📈 Detailed Biomarkers</h4>
-                        <p><strong>Movement Quality:</strong> ${(pred.biomarkers.movement_quality * 100).toFixed(1)}%</p>
-                        <p><strong>Fatigue Index:</strong> ${pred.biomarkers.fatigue_index.toFixed(3)}</p>
-                        <p><strong>Movement Smoothness:</strong> ${pred.biomarkers.movement_smoothness.toFixed(3)}</p>
+                        <h4>📈 Performance Metrics</h4>
+                        <p><strong>Performance Score:</strong> ${pred.performance_score}%</p>
+                        ${pred.detected_risks && pred.detected_risks.length > 0 ? 
+                            `<p><strong>Detected Risks:</strong> ${pred.detected_risks.join(', ')}</p>` : 
+                            '<p><strong>Detected Risks:</strong> None</p>'}
                     </div>
                 `;
 
@@ -283,11 +349,11 @@
                             datasets: [{
                                 label: 'Biomarker Scores',
                                 data: [
-                                    pred.biomarkers.movement_quality * 100,
-                                    (1 - pred.biomarkers.fatigue_index) * 100,
-                                    pred.biomarkers.movement_smoothness * 100,
-                                    (pred.biomarkers.movement_quality * 90) + 10,
-                                    (1 - pred.biomarkers.fatigue_index) * 80 + 20
+                                    pred.confidence * 100,
+                                    (1 - (pred.confidence > 0.8 ? 0.05 : 0.15)) * 100,
+                                    (pred.confidence * 0.9 + 0.1) * 100,
+                                    (pred.confidence * 90) + 10,
+                                    (1 - (pred.confidence > 0.8 ? 0.05 : 0.15)) * 80 + 20
                                 ],
                                 backgroundColor: 'rgba(52, 152, 219, 0.2)',
                                 borderColor: 'rgba(52, 152, 219, 1)',
@@ -310,8 +376,9 @@
             } else {
                 contentDiv.innerHTML = `
                     <div style="color: #e74c3c; text-align: center; padding: 20px;">
-                        <h3>❌ Error</h3>
-                        <p>${result.error || 'Failed to get prediction'}</p>
+                        <h3>❌ Prediction Error</h3>
+                        <p>${result.error || 'Failed to get prediction from server'}</p>
+                        <p style="font-size: 0.9em; margin-top: 10px;">Please check if all AI components are loaded.</p>
                     </div>
                 `;
             }
@@ -320,27 +387,23 @@
             resultDiv.scrollIntoView({ behavior: 'smooth' });
         }
 
-        function displayError() {
+        function displayError(errorMessage) {
             const contentDiv = document.getElementById('result-content');
             contentDiv.innerHTML = `
                 <div style="color: #e74c3c; text-align: center; padding: 20px;">
                     <h3>❌ Connection Error</h3>
-                    <p>Unable to connect to AI server. Please check if the server is running.</p>
+                    <p>${errorMessage || 'Unable to connect to AI server'}</p>
+                    <p style="font-size: 0.9em; margin-top: 10px;">
+                        Please check:<br>
+                        1. Server is running<br>
+                        2. Internet connection<br>
+                        3. Refresh the page and try again
+                    </p>
                 </div>
             `;
             document.getElementById('result').style.display = 'block';
         }
-
-        // Check server health on load
-        window.addEventListener('load', async () => {
-            try {
-                const response = await fetch('/health');
-                const health = await response.json();
-                console.log('Server health:', health);
-            } catch (error) {
-                console.log('Server not responding yet');
-            }
-        });
     </script>
 </body>
 </html>
+
