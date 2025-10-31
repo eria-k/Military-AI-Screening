@@ -4,12 +4,15 @@ import tensorflow as tf
 import joblib
 from flask import Flask, render_template, request, jsonify
 import logging
+from flask_cors import CORS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+CORS(app)  # Add this line - enables CORS for all route
+
 
 # Global variables for loaded components
 model = None
@@ -140,6 +143,11 @@ def health_check():
         'message': 'Military AI Screening System',
         'system_ready': all_components_loaded
     })
+    
+    @app.route('/predict', methods=['POST', 'OPTIONS'])
+def predict():
+    if request.method == 'OPTIONS':
+        return '', 200
 
 @app.route('/predict', methods=['POST'])
 def predict():
