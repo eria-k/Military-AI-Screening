@@ -144,7 +144,7 @@ def health_check():
         'system_ready': all_components_loaded
     })
     
-    @app.route('/predict', methods=['POST', 'OPTIONS'])
+@app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
     if request.method == 'OPTIONS':
         return '', 200
